@@ -54,15 +54,28 @@ fn main() {
 
 #[command]
 fn claim(ctx: &mut Context, msg: &Message) -> CommandResult {
-    println!("INFO: Claim command invoked!");
+    println!("");
 
     let connection = establish_connection();
 
     let cmd = String::from("/claim");
-    let user = create_user(&connection, &msg.author.id.to_string(), &msg.author.name);
-    let msg_without_cmd = &msg.content[cmd.len()..msg.content.len()];
+    let discord_id = &msg.author.id.to_string();
+    let username = &msg.author.name;
 
-    println!("DEBUG: '{:?}'", msg_without_cmd);
+    println!(
+        "DEBUG: Discord user ( {} , {} ) has invoked /claim",
+        discord_id, username
+    );
+
+    let user = find_or_create_user(&connection, &discord_id, &username);
+    let user = update_user(&connection, &user.id, &discord_id, &username);
+
+    println!(
+        "DEBUG: User ( {}  , {} , {} ) updated",
+        user.id, user.discord_id, user.username
+    );
+
+    let msg_without_cmd = &msg.content[cmd.len()..msg.content.len()];
 
     let position: Vec<i32> = msg_without_cmd
         .trim()
@@ -71,7 +84,7 @@ fn claim(ctx: &mut Context, msg: &Message) -> CommandResult {
         .filter_map(|x| x.trim().parse().ok())
         .collect();
 
-    println!("DEBUG: {:?}", position);
+    println!("DEBUG: Position: {:?}", position);
 
     let x = position[0];
     let y = position[1];
@@ -102,6 +115,15 @@ pub fn establish_connection() -> PgConnection {
     PgConnection::establish(&database_url).expect(&format!("Error connecting to {}", database_url))
 }
 
+pub fn find_user<'a>(
+    conn: &PgConnection,
+    discord_id: &'a str,
+) -> Result<User, diesel::result::Error> {
+    use schema::users::dsl::*;
+
+    users.filter(discord_id.eq(discord_id)).first::<User>(conn)
+}
+
 pub fn create_user<'a>(conn: &PgConnection, discord_id: &'a str, username: &'a str) -> User {
     use schema::users;
 
@@ -114,6 +136,37 @@ pub fn create_user<'a>(conn: &PgConnection, discord_id: &'a str, username: &'a s
         .values(&new_user)
         .get_result(conn)
         .expect("Error saving new post")
+}
+
+pub fn update_user<'a>(
+    conn: &PgConnection,
+    id: &'a i32,
+    discord_id: &'a str,
+    username: &'a str,
+) -> User {
+    diesel::update(schema::users::table.find(id))
+        .set((
+            schema::users::columns::discord_id.eq(discord_id),
+            schema::users::columns::username.eq(username),
+        ))
+        .get_result::<User>(conn)
+        .expect(&format!("Unable to update user {}", id))
+}
+
+pub fn find_or_create_user<'a>(
+    conn: &PgConnection,
+    discord_id: &'a str,
+    username: &'a str,
+) -> User {
+    let maybe_user = find_user(&conn, &discord_id);
+
+    match maybe_user {
+        Ok(u) => u,
+        Err(error) => match error {
+            diesel::result::Error::NotFound => create_user(&conn, &discord_id, &username),
+            other_error => panic!("Problem finding a user: {:?}", other_error),
+        },
+    }
 }
 
 pub fn show_users() {
